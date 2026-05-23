@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.Rendering;
@@ -16,6 +17,52 @@ public sealed class EditorArFaceSchoolDemo : MonoBehaviour
 {
     const string PropsAttachChildName = "Props_Attach_Point";
 
+    enum GeneratedFaceFilter
+    {
+        None,
+        Glasses,
+        Crown,
+        Hat,
+        PartyHat,
+        Mask,
+        Heart,
+        Headphones,
+        Star,
+        CyberpunkVisor,
+        LiquidMercuryMask
+    }
+
+    struct FilterChoice
+    {
+        public GameObject Prefab;
+        public GeneratedFaceFilter Generated;
+        public bool IsGenerated;
+
+        public static FilterChoice FromPrefab(GameObject prefab)
+        {
+            return new FilterChoice { Prefab = prefab };
+        }
+
+        public static FilterChoice FromGenerated(GeneratedFaceFilter generated)
+        {
+            return new FilterChoice { Generated = generated, IsGenerated = true };
+        }
+    }
+
+    static readonly GeneratedFaceFilter[] BuiltInGeneratedFilters =
+    {
+        GeneratedFaceFilter.Glasses,
+        GeneratedFaceFilter.Hat,
+        GeneratedFaceFilter.PartyHat,
+        GeneratedFaceFilter.Crown,
+        GeneratedFaceFilter.Mask,
+        GeneratedFaceFilter.Heart,
+        GeneratedFaceFilter.Headphones,
+        GeneratedFaceFilter.Star,
+        GeneratedFaceFilter.CyberpunkVisor,
+        GeneratedFaceFilter.LiquidMercuryMask
+    };
+
     [SerializeField]
     Transform demoRoot;
 
@@ -28,6 +75,26 @@ public sealed class EditorArFaceSchoolDemo : MonoBehaviour
 
     [SerializeField]
     GameObject[] filterPrefabs;
+
+    [SerializeField]
+    [Tooltip("Runtime-generated filters appended after Filter Prefabs. Used for quick editor filters without imported models.")]
+    GeneratedFaceFilter[] generatedFilters =
+    {
+        GeneratedFaceFilter.Glasses,
+        GeneratedFaceFilter.Hat,
+        GeneratedFaceFilter.PartyHat,
+        GeneratedFaceFilter.Crown,
+        GeneratedFaceFilter.Mask,
+        GeneratedFaceFilter.Heart,
+        GeneratedFaceFilter.Headphones,
+        GeneratedFaceFilter.Star,
+        GeneratedFaceFilter.CyberpunkVisor,
+        GeneratedFaceFilter.LiquidMercuryMask
+    };
+
+    [SerializeField]
+    [Tooltip("When false, a scene with Filter Prefabs uses only those prefabs. Generated Filters become the fallback set.")]
+    bool appendGeneratedFiltersAfterPrefabs;
 
     [SerializeField]
     [Tooltip("Creates a fullscreen overlay with a Next Filter button while in Editor Play mode.")]
@@ -452,10 +519,10 @@ public sealed class EditorArFaceSchoolDemo : MonoBehaviour
             yield break;
         }
 
-        GameObject[] effectiveFilters = EffectiveFilterPrefabs();
+        FilterChoice[] effectiveFilters = EffectiveFilterChoices();
         if (effectiveFilters.Length == 0)
         {
-            Debug.LogWarning($"{nameof(EditorArFaceSchoolDemo)}: Add entries to Filter Prefabs (or assign Props Crazy Eyes prefab as fallback).", this);
+            Debug.LogWarning($"{nameof(EditorArFaceSchoolDemo)}: Add entries to Filter Prefabs, Generated Filters, or assign Props Crazy Eyes prefab as fallback.", this);
             yield break;
         }
 
@@ -492,7 +559,7 @@ public sealed class EditorArFaceSchoolDemo : MonoBehaviour
         _propsAttachAnchor = propsAttach;
 
         _filterIndex = 0;
-        SpawnActiveFilterPrefab(effectiveFilters);
+        SpawnActiveFilter(effectiveFilters);
 
         if (autoCreateFilterSwitchUi && effectiveFilters.Length > 1)
             BuildEditorFilterSwitcherUi();
@@ -506,42 +573,60 @@ public sealed class EditorArFaceSchoolDemo : MonoBehaviour
         if (!Application.isEditor || !_setupComplete)
             return;
 
-        GameObject[] list = EffectiveFilterPrefabs();
+        FilterChoice[] list = EffectiveFilterChoices();
         if (list.Length <= 1)
             return;
 
         _filterIndex = (_filterIndex + 1) % list.Length;
 
-        SpawnActiveFilterPrefab(list);
+        SpawnActiveFilter(list);
     }
 
-    GameObject[] EffectiveFilterPrefabs()
+    FilterChoice[] EffectiveFilterChoices()
     {
+        var choices = new List<FilterChoice>();
+
         if (filterPrefabs != null && filterPrefabs.Length > 0)
         {
-            int n = 0;
-            foreach (GameObject go in filterPrefabs)
-                if (go != null)
-                    n++;
-            if (n == 0)
-                return propsCrazyEyesPrefab != null ? new[] { propsCrazyEyesPrefab } : Array.Empty<GameObject>();
-
-            GameObject[] a = new GameObject[n];
-            int i = 0;
             foreach (GameObject go in filterPrefabs)
             {
                 if (go == null)
                     continue;
-                a[i++] = go;
+                choices.Add(FilterChoice.FromPrefab(go));
             }
-
-            return a;
         }
 
-        return propsCrazyEyesPrefab != null ? new[] { propsCrazyEyesPrefab } : Array.Empty<GameObject>();
+        if (choices.Count == 0 && propsCrazyEyesPrefab != null)
+            choices.Add(FilterChoice.FromPrefab(propsCrazyEyesPrefab));
+
+        AddGeneratedChoices(choices, BuiltInGeneratedFilters);
+        AddGeneratedChoices(choices, generatedFilters);
+
+        return choices.Count > 0 ? choices.ToArray() : Array.Empty<FilterChoice>();
     }
 
-    void SpawnActiveFilterPrefab(GameObject[] list)
+    static void AddGeneratedChoices(List<FilterChoice> choices, GeneratedFaceFilter[] filters)
+    {
+        if (filters == null)
+            return;
+
+        foreach (GeneratedFaceFilter filter in filters)
+        {
+            if (filter == GeneratedFaceFilter.None || HasGeneratedChoice(choices, filter))
+                continue;
+            choices.Add(FilterChoice.FromGenerated(filter));
+        }
+    }
+
+    static bool HasGeneratedChoice(List<FilterChoice> choices, GeneratedFaceFilter filter)
+    {
+        foreach (FilterChoice choice in choices)
+            if (choice.IsGenerated && choice.Generated == filter)
+                return true;
+        return false;
+    }
+
+    void SpawnActiveFilter(FilterChoice[] list)
     {
         if (_activeFilterInstance != null)
         {
@@ -552,12 +637,17 @@ public sealed class EditorArFaceSchoolDemo : MonoBehaviour
         if (_propsAttachAnchor == null || list == null || list.Length == 0)
             return;
 
-        GameObject pref = list[Mathf.Clamp(_filterIndex, 0, list.Length - 1)];
-        if (pref == null)
+        FilterChoice choice = list[Mathf.Clamp(_filterIndex, 0, list.Length - 1)];
+        if (!choice.IsGenerated && choice.Prefab == null)
             return;
 
-        GameObject spawned = Instantiate(pref, _propsAttachAnchor);
-        spawned.name = pref.name + " (clone)";
+        GameObject spawned = choice.IsGenerated
+            ? CreateGeneratedFilter(choice.Generated)
+            : Instantiate(choice.Prefab, _propsAttachAnchor);
+        if (choice.IsGenerated)
+            spawned.transform.SetParent(_propsAttachAnchor, false);
+
+        spawned.name = choice.IsGenerated ? choice.Generated + " Filter" : choice.Prefab.name + " (clone)";
         _activeFilterInstance = spawned;
 
         ConvertPropsToBuiltInPipeline(spawned);
@@ -579,6 +669,176 @@ public sealed class EditorArFaceSchoolDemo : MonoBehaviour
             spawned.transform.localRotation = Quaternion.identity;
             spawned.transform.localScale = Vector3.one;
         }
+    }
+
+    static GameObject CreateGeneratedFilter(GeneratedFaceFilter filter)
+    {
+        GameObject root = new GameObject("Generated " + filter);
+
+        Material black = CreateFilterMaterial("Filter Black", new Color(0.02f, 0.02f, 0.025f, 1f));
+        Material gold = CreateFilterMaterial("Filter Gold", new Color(1f, 0.72f, 0.16f, 1f));
+        Material blue = CreateFilterMaterial("Filter Blue", new Color(0.1f, 0.44f, 0.88f, 1f));
+        Material darkBlue = CreateFilterMaterial("Filter Dark Blue", new Color(0.02f, 0.08f, 0.18f, 1f));
+        Material maskBlue = CreateFilterMaterial("Filter Mask Blue", new Color(0.15f, 0.78f, 0.95f, 1f));
+        Material jewel = CreateFilterMaterial("Filter Jewel", new Color(0.95f, 0.08f, 0.22f, 1f));
+        Material red = CreateFilterMaterial("Filter Red", new Color(1f, 0.12f, 0.24f, 1f));
+        Material purple = CreateFilterMaterial("Filter Purple", new Color(0.52f, 0.18f, 0.86f, 1f));
+        Material white = CreateFilterMaterial("Filter White", new Color(0.95f, 0.95f, 0.98f, 1f));
+        Material neonCyan = CreateFilterMaterial("Filter Neon Cyan", new Color(0f, 0.95f, 1f, 1f));
+        Material neonMagenta = CreateFilterMaterial("Filter Neon Magenta", new Color(1f, 0.05f, 0.85f, 1f));
+        Material hologramGlass = CreateTransparentFilterMaterial("Filter Hologram Glass", new Color(0.08f, 0.9f, 1f, 0.42f));
+        Material mercury = CreateMetallicFilterMaterial("Filter Liquid Mercury", new Color(0.78f, 0.82f, 0.86f, 1f), 1f, 0.08f);
+        Material darkChrome = CreateMetallicFilterMaterial("Filter Dark Chrome", new Color(0.22f, 0.24f, 0.28f, 1f), 1f, 0.04f);
+
+        switch (filter)
+        {
+            case GeneratedFaceFilter.Glasses:
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Lens", new Vector3(-0.035f, 0.018f, -0.018f), Vector3.zero, new Vector3(0.045f, 0.032f, 0.006f), black);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Lens", new Vector3(0.035f, 0.018f, -0.018f), Vector3.zero, new Vector3(0.045f, 0.032f, 0.006f), black);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Bridge", new Vector3(0f, 0.018f, -0.018f), Vector3.zero, new Vector3(0.028f, 0.008f, 0.007f), black);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Arm", new Vector3(-0.074f, 0.018f, -0.004f), new Vector3(0f, 22f, 0f), new Vector3(0.05f, 0.006f, 0.006f), black);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Arm", new Vector3(0.074f, 0.018f, -0.004f), new Vector3(0f, -22f, 0f), new Vector3(0.05f, 0.006f, 0.006f), black);
+                break;
+
+            case GeneratedFaceFilter.Crown:
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Crown Band", new Vector3(0f, 0.104f, -0.012f), Vector3.zero, new Vector3(0.155f, 0.024f, 0.035f), gold);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Point", new Vector3(-0.052f, 0.142f, -0.012f), Vector3.zero, new Vector3(0.022f, 0.064f, 0.025f), gold);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Center Point", new Vector3(0f, 0.154f, -0.012f), Vector3.zero, new Vector3(0.024f, 0.09f, 0.025f), gold);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Point", new Vector3(0.052f, 0.142f, -0.012f), Vector3.zero, new Vector3(0.022f, 0.064f, 0.025f), gold);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Left Jewel", new Vector3(-0.052f, 0.18f, -0.012f), Vector3.zero, Vector3.one * 0.018f, jewel);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Center Jewel", new Vector3(0f, 0.205f, -0.012f), Vector3.zero, Vector3.one * 0.021f, jewel);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Right Jewel", new Vector3(0.052f, 0.18f, -0.012f), Vector3.zero, Vector3.one * 0.018f, jewel);
+                break;
+
+            case GeneratedFaceFilter.Hat:
+                AddPrimitive(root.transform, PrimitiveType.Cylinder, "Hat Brim", new Vector3(0f, 0.103f, -0.01f), Vector3.zero, new Vector3(0.12f, 0.012f, 0.075f), darkBlue);
+                AddPrimitive(root.transform, PrimitiveType.Cylinder, "Hat Top", new Vector3(0f, 0.152f, -0.01f), Vector3.zero, new Vector3(0.071f, 0.052f, 0.071f), blue);
+                AddPrimitive(root.transform, PrimitiveType.Cylinder, "Hat Band", new Vector3(0f, 0.124f, -0.01f), Vector3.zero, new Vector3(0.074f, 0.008f, 0.074f), black);
+                break;
+
+            case GeneratedFaceFilter.PartyHat:
+                AddPrimitive(root.transform, PrimitiveType.Cylinder, "Party Hat Cone", new Vector3(0f, 0.145f, -0.012f), Vector3.zero, new Vector3(0.055f, 0.105f, 0.055f), red);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Party Hat Top", new Vector3(0f, 0.215f, -0.012f), Vector3.zero, Vector3.one * 0.017f, gold);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Party Hat Band", new Vector3(0f, 0.095f, -0.012f), Vector3.zero, new Vector3(0.105f, 0.012f, 0.035f), blue);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Party Hat Stripe", new Vector3(0f, 0.145f, -0.057f), new Vector3(0f, 0f, 25f), new Vector3(0.02f, 0.095f, 0.008f), gold);
+                break;
+
+            case GeneratedFaceFilter.Mask:
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Mask Front", new Vector3(0f, -0.025f, -0.028f), Vector3.zero, new Vector3(0.14f, 0.055f, 0.012f), maskBlue);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Mask Top Fold", new Vector3(0f, 0.002f, -0.036f), Vector3.zero, new Vector3(0.12f, 0.006f, 0.01f), blue);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Mask Bottom Fold", new Vector3(0f, -0.052f, -0.036f), Vector3.zero, new Vector3(0.12f, 0.006f, 0.01f), blue);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Strap", new Vector3(-0.093f, -0.025f, -0.02f), new Vector3(0f, 0f, 18f), new Vector3(0.055f, 0.006f, 0.006f), black);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Strap", new Vector3(0.093f, -0.025f, -0.02f), new Vector3(0f, 0f, -18f), new Vector3(0.055f, 0.006f, 0.006f), black);
+                break;
+
+            case GeneratedFaceFilter.Heart:
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Left Heart Top A", new Vector3(-0.052f, -0.02f, -0.03f), Vector3.zero, Vector3.one * 0.024f, red);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Left Heart Top B", new Vector3(-0.028f, -0.02f, -0.03f), Vector3.zero, Vector3.one * 0.024f, red);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Heart Point", new Vector3(-0.04f, -0.044f, -0.03f), new Vector3(0f, 0f, 45f), new Vector3(0.032f, 0.032f, 0.012f), red);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Right Heart Top A", new Vector3(0.028f, -0.02f, -0.03f), Vector3.zero, Vector3.one * 0.024f, red);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Right Heart Top B", new Vector3(0.052f, -0.02f, -0.03f), Vector3.zero, Vector3.one * 0.024f, red);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Heart Point", new Vector3(0.04f, -0.044f, -0.03f), new Vector3(0f, 0f, 45f), new Vector3(0.032f, 0.032f, 0.012f), red);
+                break;
+
+            case GeneratedFaceFilter.Headphones:
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Headphone Band", new Vector3(0f, 0.105f, -0.012f), Vector3.zero, new Vector3(0.17f, 0.014f, 0.014f), purple);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Headphone Stem", new Vector3(-0.087f, 0.055f, -0.012f), Vector3.zero, new Vector3(0.014f, 0.09f, 0.014f), purple);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Headphone Stem", new Vector3(0.087f, 0.055f, -0.012f), Vector3.zero, new Vector3(0.014f, 0.09f, 0.014f), purple);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Ear Cup", new Vector3(-0.092f, 0.012f, -0.012f), Vector3.zero, new Vector3(0.034f, 0.052f, 0.03f), black);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Ear Cup", new Vector3(0.092f, 0.012f, -0.012f), Vector3.zero, new Vector3(0.034f, 0.052f, 0.03f), black);
+                break;
+
+            case GeneratedFaceFilter.Star:
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Star Center", new Vector3(0f, 0.08f, -0.024f), new Vector3(0f, 0f, 45f), new Vector3(0.045f, 0.045f, 0.012f), gold);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Star Vertical", new Vector3(0f, 0.08f, -0.024f), Vector3.zero, new Vector3(0.022f, 0.09f, 0.012f), gold);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Star Horizontal", new Vector3(0f, 0.08f, -0.024f), Vector3.zero, new Vector3(0.09f, 0.022f, 0.012f), gold);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Star Spark Left", new Vector3(-0.07f, 0.045f, -0.024f), Vector3.zero, Vector3.one * 0.014f, white);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Star Spark Right", new Vector3(0.07f, 0.115f, -0.024f), Vector3.zero, Vector3.one * 0.014f, white);
+                break;
+
+            case GeneratedFaceFilter.CyberpunkVisor:
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Holographic Visor Glass", new Vector3(0f, 0.014f, -0.032f), Vector3.zero, new Vector3(0.145f, 0.045f, 0.006f), hologramGlass);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Visor Top Neon", new Vector3(0f, 0.042f, -0.038f), Vector3.zero, new Vector3(0.158f, 0.006f, 0.009f), neonCyan);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Visor Bottom Neon", new Vector3(0f, -0.014f, -0.038f), Vector3.zero, new Vector3(0.138f, 0.006f, 0.009f), neonMagenta);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Left Temple Neon", new Vector3(-0.083f, 0.014f, -0.025f), new Vector3(0f, 18f, 0f), new Vector3(0.052f, 0.008f, 0.008f), neonCyan);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Right Temple Neon", new Vector3(0.083f, 0.014f, -0.025f), new Vector3(0f, -18f, 0f), new Vector3(0.052f, 0.008f, 0.008f), neonMagenta);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Circuit Line Left", new Vector3(-0.038f, 0.018f, -0.041f), new Vector3(0f, 0f, 32f), new Vector3(0.045f, 0.004f, 0.005f), neonMagenta);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Circuit Line Right", new Vector3(0.038f, 0.01f, -0.041f), new Vector3(0f, 0f, -32f), new Vector3(0.045f, 0.004f, 0.005f), neonCyan);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Circuit Node Left", new Vector3(-0.061f, 0.031f, -0.043f), Vector3.zero, Vector3.one * 0.009f, neonCyan);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Circuit Node Right", new Vector3(0.061f, -0.006f, -0.043f), Vector3.zero, Vector3.one * 0.009f, neonMagenta);
+                break;
+
+            case GeneratedFaceFilter.LiquidMercuryMask:
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Mercury Brow Left", new Vector3(-0.042f, 0.034f, -0.03f), Vector3.zero, new Vector3(0.055f, 0.024f, 0.018f), mercury);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Mercury Brow Right", new Vector3(0.042f, 0.034f, -0.03f), Vector3.zero, new Vector3(0.055f, 0.024f, 0.018f), mercury);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Molten Nose Bridge", new Vector3(0f, 0.004f, -0.036f), Vector3.zero, new Vector3(0.03f, 0.05f, 0.016f), darkChrome);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Liquid Cheek Left", new Vector3(-0.058f, -0.024f, -0.032f), Vector3.zero, new Vector3(0.04f, 0.052f, 0.018f), mercury);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Liquid Cheek Right", new Vector3(0.058f, -0.024f, -0.032f), Vector3.zero, new Vector3(0.04f, 0.052f, 0.018f), mercury);
+                AddPrimitive(root.transform, PrimitiveType.Cube, "Fluid Mouth Sweep", new Vector3(0f, -0.058f, -0.038f), new Vector3(0f, 0f, -6f), new Vector3(0.12f, 0.014f, 0.012f), darkChrome);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Drip Left Long", new Vector3(-0.075f, -0.07f, -0.034f), Vector3.zero, new Vector3(0.014f, 0.045f, 0.012f), mercury);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Drip Left Drop", new Vector3(-0.075f, -0.101f, -0.034f), Vector3.zero, Vector3.one * 0.017f, mercury);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Drip Center", new Vector3(0f, -0.085f, -0.04f), Vector3.zero, new Vector3(0.013f, 0.038f, 0.012f), darkChrome);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Drip Right Short", new Vector3(0.072f, -0.064f, -0.034f), Vector3.zero, new Vector3(0.013f, 0.028f, 0.012f), mercury);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Chrome Splash Left", new Vector3(-0.098f, 0.012f, -0.03f), Vector3.zero, Vector3.one * 0.018f, darkChrome);
+                AddPrimitive(root.transform, PrimitiveType.Sphere, "Chrome Splash Right", new Vector3(0.098f, 0.014f, -0.03f), Vector3.zero, Vector3.one * 0.018f, darkChrome);
+                break;
+        }
+
+        return root;
+    }
+
+    static Material CreateFilterMaterial(string name, Color color)
+    {
+        Shader shader = Shader.Find("Standard");
+        if (shader == null)
+            shader = Shader.Find("Unlit/Color");
+
+        Material material = new Material(shader) { name = name, color = color };
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", color);
+        material.renderQueue = 2800;
+        return material;
+    }
+
+    static Material CreateMetallicFilterMaterial(string name, Color color, float metallic, float smoothness)
+    {
+        Material material = CreateFilterMaterial(name, color);
+        if (material.HasProperty("_Metallic"))
+            material.SetFloat("_Metallic", metallic);
+        if (material.HasProperty("_Glossiness"))
+            material.SetFloat("_Glossiness", smoothness);
+        return material;
+    }
+
+    static Material CreateTransparentFilterMaterial(string name, Color color)
+    {
+        Material material = CreateFilterMaterial(name, color);
+        if (material.HasProperty("_Mode"))
+            material.SetFloat("_Mode", 3f);
+        material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        material.SetInt("_ZWrite", 0);
+        material.EnableKeyword("_ALPHABLEND_ON");
+        material.renderQueue = 3000;
+        return material;
+    }
+
+    static void AddPrimitive(Transform parent, PrimitiveType primitive, string name, Vector3 localPosition, Vector3 localEuler, Vector3 localScale, Material material)
+    {
+        GameObject go = GameObject.CreatePrimitive(primitive);
+        go.name = name;
+        go.transform.SetParent(parent, false);
+        go.transform.localPosition = localPosition;
+        go.transform.localRotation = Quaternion.Euler(localEuler);
+        go.transform.localScale = localScale;
+
+        Collider collider = go.GetComponent<Collider>();
+        if (collider != null)
+            Destroy(collider);
+
+        Renderer renderer = go.GetComponent<Renderer>();
+        if (renderer != null)
+            renderer.sharedMaterial = material;
     }
 
     static void EnsureEditorEventSystem()

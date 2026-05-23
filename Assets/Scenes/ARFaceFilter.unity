@@ -755,6 +755,11 @@ MonoBehaviour:
   - {fileID: 4672036070492158906, guid: dec9cb245c0fee64b89e7397e32a289e, type: 3}
   - {fileID: 3072673111959314633, guid: 6229c3363bbce7c4590b0a74326ec07c, type: 3}
   - {fileID: 1057963046678394846, guid: c19af72d0001ce34c82ba1c7a3f5cea4, type: 3}
+  - {fileID: 1000000000000000000, guid: db8d1052b4f3423a9f0bc4a2ebbdc353, type: 3}
+  - {fileID: 1000000000000000100, guid: b77d9a9d2bca4fa18f8b4f5a93e18a7f, type: 3}
+  - {fileID: 1000000000000000200, guid: cdbd3952e4784a9468547b3b0f4c0857, type: 3}
+  - {fileID: 1000000000000000300, guid: bb955633cf56f1f48a897b385ca04e2b, type: 3}
+  appendGeneratedFiltersAfterPrefabs: 0
   autoCreateFilterSwitchUi: 1
   nextFilterButtonLabel: Next Filter
   mainCameraOverride: {fileID: 1600812352}
